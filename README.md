@@ -23,3 +23,5 @@ This repository is not official in any capacity. I intend to try and start a con
 
 The plan is to include D in the build pipeline and migrate files with the fewest dependencies. The idea is that there will always
 be a working implementation of Lua.
+
+The thought behind this translation is that integration with D might be more powerful if Lua was implemented in D. 
