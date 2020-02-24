@@ -16,3 +16,10 @@ leading scripting language in games. Lua has a solid reference manual and there 
 Lua have been released and used in real applications since its creation in 1993. Lua featured in HOPL III, the Third ACM 
 SIGPLAN History of Programming Languages Conference, in 2007. Lua won the Front Line Award 2011 from the Game Developers 
 Magazine.
+
+# Translation to D
+
+This repository is not official in any capacity. I intend to try and start a conversation of the C source code to D.
+
+The plan is to include D in the build pipeline and migrate files with the fewest dependencies. The idea is that there will always
+be a working implementation of Lua.
