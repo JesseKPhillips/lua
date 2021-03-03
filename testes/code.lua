@@ -55,6 +55,20 @@ end
 checkKlist(foo, {3.78/4, -3.78/4, -3.79/4})
 
 
+foo = function (f, a)
+        f(100 * 1000)
+        f(100.0 * 1000)
+        f(-100 * 1000)
+        f(-100 * 1000.0)
+        f(100000)
+        f(100000.0)
+        f(-100000)
+        f(-100000.0)
+      end
+
+checkKlist(foo, {100000, 100000.0, -100000, -100000.0})
+
+
 -- testing opcodes
 
 -- check that 'f' opcodes match '...'
@@ -391,28 +405,6 @@ check(function (a, b)
         end
       end,
 'TEST', 'JMP', 'TEST', 'JMP', 'ADDI', 'MMBINI', 'JMP', 'RETURN0')
-
-checkequal(
-function (a) while a < 10 do a = a + 1 end end,
-function (a)
-  ::loop::
-  if not (a < 10) then goto exit end
-  a = a + 1
-  goto loop
-::exit::
-end
-)
-
-checkequal(
-function (a) repeat local x = a + 1; a = x until a > 0 end,
-function (a)
-  ::loop:: do
-    local x = a + 1
-    a = x
-  end
-  if not (a > 0) then goto loop end
-end
-)
 
 checkequal(function () return 6 or true or nil end,
            function () return k6 or kTrue or kNil end)

@@ -166,17 +166,30 @@ static Node *mainpositionTV (const Table *t, const TValue *key) {
 
 
 /*
-** Check whether key 'k1' is equal to the key in node 'n2'.
-** This equality is raw, so there are no metamethods. Floats
-** with integer values have been normalized, so integers cannot
-** be equal to floats. It is assumed that 'eqshrstr' is simply
-** pointer equality, so that short strings are handled in the
-** default case.
+** Check whether key 'k1' is equal to the key in node 'n2'. This
+** equality is raw, so there are no metamethods. Floats with integer
+** values have been normalized, so integers cannot be equal to
+** floats. It is assumed that 'eqshrstr' is simply pointer equality, so
+** that short strings are handled in the default case.
+** A true 'deadok' means to accept dead keys as equal to their original
+** values. All dead keys are compared in the default case, by pointer
+** identity. (Only collectable objects can produce dead keys.) Note that
+** dead long strings are also compared by identity.
+** Once a key is dead, its corresponding value may be collected, and
+** then another value can be created with the same address. If this
+** other value is given to 'next', 'equalkey' will signal a false
+** positive. In a regular traversal, this situation should never happen,
+** as all keys given to 'next' came from the table itself, and therefore
+** could not have been collected. Outside a regular traversal, we
+** have garbage in, garbage out. What is relevant is that this false
+** positive does not break anything.  (In particular, 'next' will return
+** some other valid item on the table or nil.)
 */
-static int equalkey (const TValue *k1, const Node *n2) {
-  if (rawtt(k1) != keytt(n2))  /* not the same variants? */
+static int equalkey (const TValue *k1, const Node *n2, int deadok) {
+  if ((rawtt(k1) != keytt(n2)) &&  /* not the same variants? */
+       !(deadok && keyisdead(n2) && iscollectable(k1)))
    return 0;  /* cannot be same key */
-  switch (ttypetag(k1)) {
+  switch (keytt(n2)) {
     case LUA_VNIL: case LUA_VFALSE: case LUA_VTRUE:
       return 1;
     case LUA_VNUMINT:
@@ -187,7 +200,7 @@ static int equalkey (const TValue *k1, const Node *n2) {
       return pvalue(k1) == pvalueraw(keyval(n2));
     case LUA_VLCF:
       return fvalue(k1) == fvalueraw(keyval(n2));
-    case LUA_VLNGSTR:
+    case ctb(LUA_VLNGSTR):
       return luaS_eqlngstr(tsvalue(k1), keystrval(n2));
     default:
       return gcvalue(k1) == gcvalueraw(keyval(n2));
@@ -251,11 +264,12 @@ static unsigned int setlimittosize (Table *t) {
 /*
 ** "Generic" get version. (Not that generic: not valid for integers,
 ** which may be in array part, nor for floats with integral values.)
+** See explanation about 'deadok' in function 'equalkey'.
 */
-static const TValue *getgeneric (Table *t, const TValue *key) {
+static const TValue *getgeneric (Table *t, const TValue *key, int deadok) {
   Node *n = mainpositionTV(t, key);
   for (;;) {  /* check whether 'key' is somewhere in the chain */
-    if (equalkey(key, n))
+    if (equalkey(key, n, deadok))
       return gval(n);  /* that's it */
     else {
       int nx = gnext(n);
@@ -292,8 +306,8 @@ static unsigned int findindex (lua_State *L, Table *t, TValue *key,
   if (i - 1u < asize)  /* is 'key' inside array part? */
     return i;  /* yes; that's the index */
   else {
-    const TValue *n = getgeneric(t, key);
-    if (unlikely(isabstkey(n)))
+    const TValue *n = getgeneric(t, key, 1);
+    if (l_unlikely(isabstkey(n)))
       luaG_runerror(L, "invalid key to 'next'");  /* key not found */
     i = cast_int(nodefromval(n) - gnode(t, 0));  /* key index in hash table */
     /* hash elements are numbered after array ones */
@@ -471,7 +485,7 @@ static void reinsert (lua_State *L, Table *ot, Table *t) {
          already present in the table */
       TValue k;
       getnodekey(L, &k, old);
-      setobjt2t(L, luaH_set(L, t, &k), gval(old));
+      luaH_set(L, t, &k, gval(old));
     }
   }
 }
@@ -527,7 +541,7 @@ void luaH_resize (lua_State *L, Table *t, unsigned int newasize,
   }
   /* allocate new array */
   newarray = luaM_reallocvector(L, t->array, oldasize, newasize, TValue);
-  if (unlikely(newarray == NULL && newasize > 0)) {  /* allocation failed? */
+  if (l_unlikely(newarray == NULL && newasize > 0)) {  /* allocation failed? */
     freehash(L, &newt);  /* release new hash part */
     luaM_error(L);  /* raise error (with array unchanged) */
   }
@@ -583,7 +597,7 @@ Table *luaH_new (lua_State *L) {
   GCObject *o = luaC_newobj(L, LUA_VTABLE, sizeof(Table));
   Table *t = gco2t(o);
   t->metatable = NULL;
-  t->flags = cast_byte(~0);
+  t->flags = cast_byte(maskflags);  /* table has no metamethod fields */
   t->array = NULL;
   t->alimit = 0;
   setnodevector(L, t, 0);
@@ -618,10 +632,10 @@ static Node *getfreepos (Table *t) {
 ** put new key in its main position; otherwise (colliding node is in its main
 ** position), new key goes to an empty position.
 */
-TValue *luaH_newkey (lua_State *L, Table *t, const TValue *key) {
+void luaH_newkey (lua_State *L, Table *t, const TValue *key, TValue *value) {
   Node *mp;
   TValue aux;
-  if (unlikely(ttisnil(key)))
+  if (l_unlikely(ttisnil(key)))
     luaG_runerror(L, "table index is nil");
   else if (ttisfloat(key)) {
     lua_Number f = fltvalue(key);
@@ -630,9 +644,11 @@ TValue *luaH_newkey (lua_State *L, Table *t, const TValue *key) {
       setivalue(&aux, k);
       key = &aux;  /* insert it as an integer */
     }
-    else if (unlikely(luai_numisnan(f)))
+    else if (l_unlikely(luai_numisnan(f)))
       luaG_runerror(L, "table index is NaN");
   }
+  if (ttisnil(value))
+    return;  /* do not insert nil values */
   mp = mainpositionTV(t, key);
   if (!isempty(gval(mp)) || isdummy(t)) {  /* main position is taken? */
     Node *othern;
@@ -640,7 +656,8 @@ TValue *luaH_newkey (lua_State *L, Table *t, const TValue *key) {
     if (f == NULL) {  /* cannot find a free place? */
       rehash(L, t, key);  /* grow table */
       /* whatever called 'newkey' takes care of TM cache */
-      return luaH_set(L, t, key);  /* insert key into grown table */
+      luaH_set(L, t, key, value);  /* insert key into grown table */
+      return;
     }
     lua_assert(!isdummy(t));
     othern = mainposition(t, keytt(mp), &keyval(mp));
@@ -668,7 +685,7 @@ TValue *luaH_newkey (lua_State *L, Table *t, const TValue *key) {
   setnodekey(L, mp, key);
   luaC_barrierback(L, obj2gco(t), key);
   lua_assert(isempty(gval(mp)));
-  return gval(mp);
+  setobj2t(L, gval(mp), value);
 }
 
 
@@ -730,7 +747,7 @@ const TValue *luaH_getstr (Table *t, TString *key) {
   else {  /* for long strings, use generic case */
     TValue ko;
     setsvalue(cast(lua_State *, NULL), &ko, key);
-    return getgeneric(t, &ko);
+    return getgeneric(t, &ko, 0);
   }
 }
 
@@ -750,8 +767,23 @@ const TValue *luaH_get (Table *t, const TValue *key) {
       /* else... */
     }  /* FALLTHROUGH */
     default:
-      return getgeneric(t, key);
+      return getgeneric(t, key, 0);
   }
+}
+
+
+/*
+** Finish a raw "set table" operation, where 'slot' is where the value
+** should have been (the result of a previous "get table").
+** Beware: when using this function you probably need to check a GC
+** barrier and invalidate the TM cache.
+*/
+void luaH_finishset (lua_State *L, Table *t, const TValue *key,
+                                   const TValue *slot, TValue *value) {
+  if (isabstkey(slot))
+    luaH_newkey(L, t, key, value);
+  else
+    setobj2t(L, cast(TValue *, slot), value);
 }
 
 
@@ -759,25 +791,21 @@ const TValue *luaH_get (Table *t, const TValue *key) {
 ** beware: when using this function you probably need to check a GC
 ** barrier and invalidate the TM cache.
 */
-TValue *luaH_set (lua_State *L, Table *t, const TValue *key) {
-  const TValue *p = luaH_get(t, key);
-  if (!isabstkey(p))
-    return cast(TValue *, p);
-  else return luaH_newkey(L, t, key);
+void luaH_set (lua_State *L, Table *t, const TValue *key, TValue *value) {
+  const TValue *slot = luaH_get(t, key);
+  luaH_finishset(L, t, key, slot, value);
 }
 
 
 void luaH_setint (lua_State *L, Table *t, lua_Integer key, TValue *value) {
   const TValue *p = luaH_getint(t, key);
-  TValue *cell;
-  if (!isabstkey(p))
-    cell = cast(TValue *, p);
-  else {
+  if (isabstkey(p)) {
     TValue k;
     setivalue(&k, key);
-    cell = luaH_newkey(L, t, &k);
+    luaH_newkey(L, t, &k, value);
   }
-  setobj2t(L, cell, value);
+  else
+    setobj2t(L, cast(TValue *, p), value);
 }
 
 
