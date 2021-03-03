@@ -305,6 +305,17 @@ t[Set{1,3,5}] = 1
 assert(t[Set{1,3,5}] == undef)
 
 
+do   -- test invalidating flags
+  local mt = {__eq = true}
+  local a = setmetatable({10}, mt)
+  local b = setmetatable({10}, mt)
+  mt.__eq = nil
+  assert(a ~= b)   -- no metamethod
+  mt.__eq = function (x,y) return x[1] == y[1] end
+  assert(a == b)   -- must use metamethod now
+end
+
+
 if not T then
   (Message or print)('\n >>> testC not active: skipping tests for \z
 userdata <<<\n')
@@ -325,6 +336,7 @@ else
   assert(u1 == u3 and u3 == u1 and u1 ~= u2)
   assert(u2 == u1 and u2 == u3 and u3 == u2)
   assert(u2 ~= {})   -- different types cannot be equal
+  assert(rawequal(u1, u1) and not rawequal(u1, u3))
 
   local mirror = {}
   debug.setmetatable(u3, {__index = mirror, __newindex = mirror})

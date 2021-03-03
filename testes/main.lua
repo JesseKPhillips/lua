@@ -287,6 +287,33 @@ RUN([[lua "-e_PROMPT='%s'" -i < %s > %s]], prompt, prog, out)
 local t = getoutput()
 assert(string.find(t, prompt .. ".*" .. prompt .. ".*" .. prompt))
 
+-- using the prompt default
+prepfile[[ --
+a = 2
+]]
+RUN([[lua -i < %s > %s]], prog, out)
+local t = getoutput()
+prompt = "> "    -- the default
+assert(string.find(t, prompt .. ".*" .. prompt .. ".*" .. prompt))
+
+
+-- non-string prompt
+prompt =
+  "local C = 0;\z
+   _PROMPT=setmetatable({},{__tostring = function () \z
+     C = C + 1; return C end})"
+prepfile[[ --
+a = 2
+]]
+RUN([[lua -e "%s" -i < %s > %s]], prompt, prog, out)
+local t = getoutput()
+assert(string.find(t, [[
+1 --
+2a = 2
+3
+]], 1, true))
+
+
 -- test for error objects
 prepfile[[
 debug = require "debug"
@@ -393,12 +420,12 @@ if T then   -- test library?
   -- testing 'warn'
   warn("@store")
   warn("@123", "456", "789")
-  assert(_WARN == "@123456789"); _WARN = nil
+  assert(_WARN == "@123456789"); _WARN = false
 
   warn("zip", "", " ", "zap")
-  assert(_WARN == "zip zap"); _WARN = nil
+  assert(_WARN == "zip zap"); _WARN = false
   warn("ZIP", "", " ", "ZAP")
-  assert(_WARN == "ZIP ZAP"); _WARN = nil
+  assert(_WARN == "ZIP ZAP"); _WARN = false
   warn("@normal")
 end
 
